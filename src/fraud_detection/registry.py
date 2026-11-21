@@ -1,7 +1,7 @@
 """MLflow Model Registry helpers.
 
 We use *aliases* (``champion``) rather than the deprecated stages
-(Staging/Production). The API will always load ``models:/fraud-detector@champion``,
+(Staging/Production). The API will always load ``models:/ride-classifier@champion``,
 so promoting or rolling back a model is just moving the alias.
 """
 
@@ -31,7 +31,7 @@ def promote_if_better(
     version: str,
     new_score: float,
     alias: str = "champion",
-    metric: str = "test_pr_auc",
+    metric: str = "test_macro_f1",
 ) -> bool:
     """Set ``alias`` on ``version`` if it beats the current champion on ``metric``."""
     current = get_champion_metric(client, model_name, alias, metric)
