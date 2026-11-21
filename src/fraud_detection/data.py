@@ -1,9 +1,12 @@
-"""Data extraction, validation and preparation.
+"""Data loading, validation and preparation for the GBG500 ride dataset.
+
+The raw data (from Inside) is two files, versioned with DVC:
+    data/raw/GBG500.parquet      one row per IMU sample: ride_id, time_index (ms), ax, ay, az, rx, ry, rz
+    data/raw/GBG500_labels.csv   one row per ride: RIDE_ID, LABEL (5 classes)
 
 Usage:
-    python -m fraud_detection.data download   # Kaggle -> data/raw/creditcard.csv
-    python -m fraud_detection.data prepare    # raw -> train/val/test parquet
-    python -m fraud_detection.data sample     # synthetic data (CI, smoke tests, demos)
+    python -m fraud_detection.data prepare    # raw -> train/val/test parquet (split by ride)
+    python -m fraud_detection.data sample     # synthetic rides (CI, smoke tests, demos)
 """
 
 from __future__ import annotations
@@ -11,8 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import shutil
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -20,49 +21,29 @@ from sklearn.model_selection import train_test_split
 
 from fraud_detection.config import (
     FEATURE_COLUMNS,
+    LABELS,
     PROJECT_ROOT,
+    RIDE_COLUMN,
     TARGET_COLUMN,
+    TIME_COLUMN,
     load_params,
 )
 
 logger = logging.getLogger(__name__)
 
-KAGGLE_DATASET = "mlg-ulb/creditcardfraud"
+SAMPLING_STEP_MS = 100  # 10 Hz
 
 
 # --------------------------------------------------------------------------- #
-# Extraction
+# Loading
 # --------------------------------------------------------------------------- #
-def download_raw_data(dest: Path) -> Path:
-    """Download the Kaggle dataset with ``kagglehub``.
-
-    Needs Kaggle credentials: either ``~/.kaggle/kaggle.json`` or the
-    ``KAGGLE_USERNAME`` / ``KAGGLE_KEY`` environment variables.
-    """
-    import kagglehub  # imported lazily: only needed for this step
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    download_dir = Path(kagglehub.dataset_download(KAGGLE_DATASET))
-    shutil.copy(download_dir / "creditcard.csv", dest)
-    logger.info("Raw data saved to %s", dest)
-    return dest
-
-
-def synthetic_dataset(n_rows: int = 3000, fraud_ratio: float = 0.05, seed: int = 0) -> pd.DataFrame:
-    """Fake dataset with the exact Kaggle schema.
-
-    Used by the tests and the CI smoke test, so they never need Kaggle
-    credentials nor the real 150 MB file.
-    """
-    rng = np.random.default_rng(seed)
-    y = (rng.random(n_rows) < fraud_ratio).astype(int)
-    x = rng.normal(size=(n_rows, len(FEATURE_COLUMNS))).astype("float32")
-    x[y == 1, 1:5] += 2.5  # frauds are separable on a few V features
-    df = pd.DataFrame(x, columns=FEATURE_COLUMNS)
-    df["Time"] = rng.uniform(0, 172_800, n_rows)
-    df["Amount"] = rng.exponential(80, n_rows)
-    df[TARGET_COLUMN] = y
-    return df
+def load_raw(params: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Read the IMU samples and the ride labels."""
+    cfg = params["data"]
+    samples = pd.read_parquet(PROJECT_ROOT / cfg["raw_path"])
+    labels = pd.read_csv(PROJECT_ROOT / cfg["labels_path"])
+    labels = labels.rename(columns={"RIDE_ID": RIDE_COLUMN, "LABEL": TARGET_COLUMN})
+    return samples, labels
 
 
 # --------------------------------------------------------------------------- #
@@ -72,91 +53,159 @@ class DataValidationError(ValueError):
     """Raised when the dataset does not match the expected schema."""
 
 
-def validate(df: pd.DataFrame) -> None:
-    """Basic data quality checks (schema, nulls, label values)."""
-    expected = [*FEATURE_COLUMNS, TARGET_COLUMN]
-    missing = set(expected) - set(df.columns)
+def validate(samples: pd.DataFrame, labels: pd.DataFrame) -> None:
+    """Data quality checks: schema, label values, one label per ride, usable signals."""
+    expected = [RIDE_COLUMN, TIME_COLUMN, *FEATURE_COLUMNS]
+    missing = set(expected) - set(samples.columns)
     if missing:
-        raise DataValidationError(f"Missing columns: {sorted(missing)}")
-    if df[expected].isnull().any().any():
-        raise DataValidationError("Dataset contains null values")
-    if not set(df[TARGET_COLUMN].unique()) <= {0, 1}:
-        raise DataValidationError("Target must be binary (0/1)")
-    if (df["Amount"] < 0).any():
-        raise DataValidationError("Amount must be >= 0")
+        raise DataValidationError(f"Missing columns in samples: {sorted(missing)}")
+    if not {RIDE_COLUMN, TARGET_COLUMN} <= set(labels.columns):
+        raise DataValidationError("Labels must have RIDE_ID and LABEL columns")
+
+    unknown = set(labels[TARGET_COLUMN]) - set(LABELS)
+    if unknown:
+        raise DataValidationError(f"Unknown labels: {sorted(unknown)} (expected {LABELS})")
+    if labels[RIDE_COLUMN].duplicated().any():
+        raise DataValidationError("A ride has several labels")
+    unlabelled = set(samples[RIDE_COLUMN]) - set(labels[RIDE_COLUMN])
+    if unlabelled:
+        raise DataValidationError(f"{len(unlabelled)} rides have no label")
+
+    # A ride where one sensor channel is entirely missing cannot be used
+    all_nan = samples.groupby(RIDE_COLUMN)[FEATURE_COLUMNS].apply(lambda d: d.isna().all().any())
+    if all_nan.any():
+        raise DataValidationError(f"{int(all_nan.sum())} rides have a channel with no value at all")
+    if np.isinf(samples[FEATURE_COLUMNS].to_numpy(dtype=float)).any():
+        raise DataValidationError("Samples contain infinite values")
 
 
 # --------------------------------------------------------------------------- #
-# Preparation
+# Cleaning + preparation
 # --------------------------------------------------------------------------- #
-def split_data(
-    df: pd.DataFrame, test_size: float, val_size: float, seed: int
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Stratified train / validation / test split (keeps the fraud ratio)."""
-    train_val, test = train_test_split(df, test_size=test_size, stratify=df[TARGET_COLUMN], random_state=seed)
-    relative_val = val_size / (1 - test_size)
+def clean(samples: pd.DataFrame) -> pd.DataFrame:
+    """Time order inside each ride, duplicated timestamps removed, float32.
+
+    Missing values (sensor dropouts, ~0.7 % of GBG500) are KEPT: they are filled inside the
+    model wrapper, exactly as at serving time, so training and inference see the same thing.
+    """
+    out = samples.sort_values([RIDE_COLUMN, TIME_COLUMN])
+    out = out.drop_duplicates(subset=[RIDE_COLUMN, TIME_COLUMN], keep="first")
+    out[FEATURE_COLUMNS] = out[FEATURE_COLUMNS].astype("float32")
+    return out.reset_index(drop=True)
+
+
+def split_rides(labels: pd.DataFrame, test_size: float, val_size: float, seed: int) -> dict[str, list[str]]:
+    """Train / validation / test split of the RIDES, stratified on the class.
+
+    Splitting by ride (not by sample or window) prevents leakage: windows of the same
+    ride never end up on both sides.
+    """
+    train_val, test = train_test_split(labels, test_size=test_size, stratify=labels[TARGET_COLUMN], random_state=seed)
     train, val = train_test_split(
         train_val,
-        test_size=relative_val,
+        test_size=val_size / (1 - test_size),
         stratify=train_val[TARGET_COLUMN],
         random_state=seed,
     )
-    return train, val, test
+    return {name: sorted(part[RIDE_COLUMN]) for name, part in {"train": train, "val": val, "test": test}.items()}
 
 
 def prepare(params: dict) -> dict:
-    """Load raw CSV, validate, deduplicate, split and save as parquet."""
-    cfg = params["data"]
-    raw_path = PROJECT_ROOT / cfg["raw_path"]
-    out_dir = PROJECT_ROOT / cfg["processed_dir"]
+    """Load, validate, clean and split the data; save one parquet per split."""
+    out_dir = PROJECT_ROOT / params["data"]["processed_dir"]
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(raw_path)
-    validate(df)
-    n_before = len(df)
-    df = df.drop_duplicates().reset_index(drop=True)
-    df[FEATURE_COLUMNS] = df[FEATURE_COLUMNS].astype("float32")
-    df[TARGET_COLUMN] = df[TARGET_COLUMN].astype("int64")
+    samples, labels = load_raw(params)
+    validate(samples, labels)
+    n_before = len(samples)
+    samples = clean(samples)
+    data = samples.merge(labels[[RIDE_COLUMN, TARGET_COLUMN]], on=RIDE_COLUMN, how="inner")
 
-    train, val, test = split_data(df, cfg["test_size"], cfg["val_size"], params["seed"])
-    for name, part in {"train": train, "val": val, "test": test}.items():
-        part.to_parquet(out_dir / f"{name}.parquet", index=False)
-
-    stats = {
-        "n_rows_raw": n_before,
-        "n_duplicates_removed": n_before - len(df),
-        "fraud_ratio": float(df[TARGET_COLUMN].mean()),
-        "n_train": len(train),
-        "n_val": len(val),
-        "n_test": len(test),
+    splits = split_rides(labels, params["data"]["test_size"], params["data"]["val_size"], params["seed"])
+    stats: dict = {
+        "n_rides": int(labels[RIDE_COLUMN].nunique()),
+        "n_samples": n_before,
+        "n_duplicates_removed": n_before - len(samples),
+        "missing_ratio": round(float(samples[FEATURE_COLUMNS].isna().to_numpy().mean()), 6),
+        "class_counts": labels[TARGET_COLUMN].value_counts().reindex(LABELS, fill_value=0).to_dict(),
     }
+    for name, ride_ids in splits.items():
+        part = data[data[RIDE_COLUMN].isin(ride_ids)]
+        part.to_parquet(out_dir / f"{name}.parquet", index=False)
+        per_ride = part.drop_duplicates(RIDE_COLUMN)[TARGET_COLUMN]
+        stats[f"n_rides_{name}"] = len(ride_ids)
+        stats[f"class_counts_{name}"] = per_ride.value_counts().reindex(LABELS, fill_value=0).to_dict()
+
     (out_dir / "data_stats.json").write_text(json.dumps(stats, indent=2))
-    logger.info("Prepared data: %s", stats)
+    logger.info("Prepared data: %s", json.dumps(stats))
     return stats
 
 
-def load_split(name: str, params: dict) -> tuple[pd.DataFrame, pd.Series]:
-    """Load one prepared split and return (X, y)."""
-    path = PROJECT_ROOT / params["data"]["processed_dir"] / f"{name}.parquet"
-    df = pd.read_parquet(path)
-    return df[FEATURE_COLUMNS], df[TARGET_COLUMN]
+def load_split(name: str, params: dict) -> tuple[list[np.ndarray], np.ndarray, list[str]]:
+    """Load one split as a list of rides.
+
+    Returns (signals, labels, ride_ids): ``signals[i]`` has shape (n_samples_i, 6),
+    ``labels[i]`` is the class index in ``LABELS``.
+    """
+    df = pd.read_parquet(PROJECT_ROOT / params["data"]["processed_dir"] / f"{name}.parquet")
+    signals, y, ids = [], [], []
+    for ride_id, ride in df.groupby(RIDE_COLUMN, sort=True):
+        signals.append(ride[FEATURE_COLUMNS].to_numpy(dtype=np.float32))
+        y.append(LABELS.index(ride[TARGET_COLUMN].iloc[0]))
+        ids.append(str(ride_id))
+    return signals, np.asarray(y, dtype=np.int64), ids
+
+
+# --------------------------------------------------------------------------- #
+# Synthetic data (tests, CI smoke test, demos without the real files)
+# --------------------------------------------------------------------------- #
+def synthetic_dataset(
+    n_rides: int = 60, min_len: int = 400, max_len: int = 900, seed: int = 0
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fake rides with the exact GBG500 schema; each class has its own vibration level.
+
+    Returns (samples, labels) shaped like GBG500.parquet / GBG500_labels.csv.
+    """
+    rng = np.random.default_rng(seed)
+    # every class is represented, "Safe" is the majority like in the real data
+    classes = [LABELS[i % len(LABELS)] for i in range(len(LABELS) * 4)]
+    classes += ["Safe"] * (n_rides - len(classes))
+    level = {label: 1.0 + 0.8 * i for i, label in enumerate(LABELS)}
+    gravity = np.array([0.0, -9.6, -1.5, 0.0, 0.0, 0.0])
+
+    frames, labels = [], []
+    for i, label in enumerate(classes[:n_rides]):
+        ride_id = f"synthetic-{i:04d}"
+        n = int(rng.integers(min_len, max_len))
+        x = gravity + rng.normal(scale=0.5 * level[label], size=(n, len(FEATURE_COLUMNS)))
+        x[rng.random(x.shape) < 0.005] = np.nan  # sensor dropouts, like the real data
+        ride = pd.DataFrame(x, columns=FEATURE_COLUMNS)
+        ride.insert(0, TIME_COLUMN, np.arange(n) * SAMPLING_STEP_MS)
+        ride.insert(0, RIDE_COLUMN, ride_id)
+        frames.append(ride)
+        labels.append({"RIDE_ID": ride_id, "LABEL": label})
+    return pd.concat(frames, ignore_index=True), pd.DataFrame(labels)
+
+
+def write_synthetic(params: dict, n_rides: int) -> None:
+    samples, labels = synthetic_dataset(n_rides)
+    raw = PROJECT_ROOT / params["data"]["raw_path"]
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    samples.to_parquet(raw, index=False)
+    labels.to_csv(PROJECT_ROOT / params["data"]["labels_path"], index=False)
+    logger.info("Synthetic dataset (%d rides) written to %s", n_rides, raw.parent)
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("step", choices=["download", "prepare", "sample"])
-    parser.add_argument("--rows", type=int, default=3000, help="number of rows for `sample`")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("step", choices=["prepare", "sample"])
+    parser.add_argument("--rides", type=int, default=60, help="number of rides for `sample`")
     args = parser.parse_args()
 
     params = load_params()
-    raw_path = PROJECT_ROOT / params["data"]["raw_path"]
-    if args.step == "download":
-        download_raw_data(raw_path)
-    elif args.step == "sample":
-        raw_path.parent.mkdir(parents=True, exist_ok=True)
-        synthetic_dataset(args.rows).to_csv(raw_path, index=False)
-        logger.info("Synthetic dataset (%d rows) written to %s", args.rows, raw_path)
+    if args.step == "sample":
+        write_synthetic(params, args.rides)
     else:
         prepare(params)
 
