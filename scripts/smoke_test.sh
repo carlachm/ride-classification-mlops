@@ -10,7 +10,7 @@ IMAGE="${1:?usage: smoke_test.sh <image>}"
 docker run --rm \
   -e MLFLOW_TRACKING_URI=sqlite:////tmp/mlflow.db \
   "$IMAGE" \
-  sh -c "python -m fraud_detection.data sample --rows 3000 \
+  sh -c "python -m fraud_detection.data sample --rides 150 \
       && python -m fraud_detection.data prepare \
       && python -m fraud_detection.train \
       && cat metrics.json"
