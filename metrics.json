@@ -1,7 +1,7 @@
 {
-  "run_id": "77920eddfee64df3892d3d3091d32b9a",
-  "model_version": "2",
-  "promoted": true,
+  "run_id": "2b74bdd7f47641a0b58d1200eab19caa",
+  "model_version": "3",
+  "promoted": false,
   "quality_gate_passed": true,
   "baseline_majority_macro_f1": 0.181021897810219,
   "test_macro_f1": 0.2675324675324675,

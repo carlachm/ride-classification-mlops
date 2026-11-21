@@ -6,8 +6,7 @@
 !/data/raw/.gitkeep
 !/data/raw/*.dvc
 !/data/raw/.gitignore
-/data/processed/*
-!/data/processed/.gitkeep
+/data/processed/
 
 # MLflow local store (when no server is used)
 mlruns/
