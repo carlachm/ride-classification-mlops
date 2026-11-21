@@ -14,7 +14,7 @@ from fraud_detection.data import synthetic_dataset
 @pytest.fixture
 def fake_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     """(samples, labels) shaped like GBG500.parquet / GBG500_labels.csv."""
-    return synthetic_dataset(n_rides=60, min_len=400, max_len=700)
+    return synthetic_dataset(n_rides=100, min_len=400, max_len=600)
 
 
 @pytest.fixture
@@ -30,7 +30,6 @@ def params(tmp_path, fake_data):
     p["data"]["raw_path"] = str(raw / "GBG500.parquet")
     p["data"]["labels_path"] = str(raw / "GBG500_labels.csv")
     p["data"]["processed_dir"] = str(tmp_path / "processed")
-    p["model"]["channels"] = [8, 16]
-    p["train"]["epochs"] = 3
+    p["train"]["epochs"] = 15
     p["metrics_path"] = str(tmp_path / "metrics.json")
     return p

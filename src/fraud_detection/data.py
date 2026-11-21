@@ -171,13 +171,16 @@ def synthetic_dataset(
     classes = [LABELS[i % len(LABELS)] for i in range(len(LABELS) * 4)]
     classes += ["Safe"] * (n_rides - len(classes))
     level = {label: 1.0 + 0.8 * i for i, label in enumerate(LABELS)}
+    period = {label: 10 + 8 * i for i, label in enumerate(LABELS)}  # class-specific oscillation (samples)
     gravity = np.array([0.0, -9.6, -1.5, 0.0, 0.0, 0.0])
 
     frames, labels = [], []
     for i, label in enumerate(classes[:n_rides]):
         ride_id = f"synthetic-{i:04d}"
         n = int(rng.integers(min_len, max_len))
-        x = gravity + rng.normal(scale=0.5 * level[label], size=(n, len(FEATURE_COLUMNS)))
+        t = np.arange(n)[:, None]
+        wave = 2.0 * np.sin(2 * np.pi * t / period[label] + rng.uniform(0, 2 * np.pi))
+        x = gravity + wave + rng.normal(scale=0.5 * level[label], size=(n, len(FEATURE_COLUMNS)))
         x[rng.random(x.shape) < 0.005] = np.nan  # sensor dropouts, like the real data
         ride = pd.DataFrame(x, columns=FEATURE_COLUMNS)
         ride.insert(0, TIME_COLUMN, np.arange(n) * SAMPLING_STEP_MS)
