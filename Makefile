@@ -4,7 +4,7 @@
 export
 
 RUN = uv run
-IMAGE ?= fraud-detection-train
+IMAGE ?= ride-train
 API_IMAGE ?= ride-api
 WEB_IMAGE ?= ride-webapp
 

@@ -1,7 +1,7 @@
 [project]
 name = "fraud-detection"
 version = "0.1.0"
-description = "MLOps pipeline for credit card fraud detection"
+description = "MLOps pipeline for scooter ride classification (GBG500 IMU data)"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 # What the project needs to RUN. Exact versions live in uv.lock (commit it!).
