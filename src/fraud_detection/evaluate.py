@@ -1,7 +1,8 @@
-"""Evaluation metrics adapted to a highly imbalanced problem (~0.17% fraud).
+"""Evaluation of the 5-class ride classifier.
 
-Accuracy is meaningless here (predicting "never fraud" gives 99.8%), so we
-focus on PR-AUC, recall, precision and F1.
+The classes are very imbalanced (GBG500: 416 Safe, 38 Safe overall, 22 Bad weather, 18 Tandem,
+6 Reckless). Accuracy is misleading (always answering "Safe" gives 83 %), so the headline metric
+is the **macro-F1** (every class weighs the same), plus balanced accuracy and per-class recall.
 """
 
 from __future__ import annotations
@@ -15,59 +16,50 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from sklearn.metrics import (  # noqa: E402
     ConfusionMatrixDisplay,
-    average_precision_score,
+    accuracy_score,
+    balanced_accuracy_score,
+    classification_report,
     confusion_matrix,
     f1_score,
-    precision_recall_curve,
-    precision_score,
     recall_score,
-    roc_auc_score,
 )
 
+from fraud_detection.config import LABELS  # noqa: E402
 
-def best_f1_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
-    """Decision threshold maximising F1 (computed on the validation set)."""
-    precision, recall, thresholds = precision_recall_curve(y_true, y_proba)
-    f1 = 2 * precision * recall / np.clip(precision + recall, 1e-12, None)
-    # precision/recall have one more element than thresholds
-    return float(thresholds[np.argmax(f1[:-1])]) if len(thresholds) else 0.5
+_ALL = list(range(len(LABELS)))
 
 
-def compute_metrics(y_true: np.ndarray, y_proba: np.ndarray, threshold: float = 0.5) -> dict[str, float]:
-    y_pred = (y_proba >= threshold).astype(int)
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
-    return {
-        "pr_auc": float(average_precision_score(y_true, y_proba)),
-        "roc_auc": float(roc_auc_score(y_true, y_proba)),
-        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
-        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
-        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-        "tp": int(tp),
-        "fp": int(fp),
-        "fn": int(fn),
-        "tn": int(tn),
+def _slug(label: str) -> str:
+    return label.lower().replace(" ", "_")
+
+
+def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    recalls = recall_score(y_true, y_pred, labels=_ALL, average=None, zero_division=0)
+    metrics = {
+        "macro_f1": float(f1_score(y_true, y_pred, labels=_ALL, average="macro", zero_division=0)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        "accuracy": float(accuracy_score(y_true, y_pred)),
     }
+    metrics.update({f"recall_{_slug(label)}": float(r) for label, r in zip(LABELS, recalls, strict=True)})
+    return metrics
 
 
-def save_plots(y_true: np.ndarray, y_proba: np.ndarray, threshold: float, out_dir: Path) -> list[Path]:
-    """Save PR curve + confusion matrix (logged as MLflow artifacts)."""
+def majority_baseline_macro_f1(y_true: np.ndarray) -> float:
+    """Macro-F1 of a model that always predicts the most frequent class ("Safe")."""
+    majority = np.bincount(y_true, minlength=len(LABELS)).argmax()
+    return float(f1_score(y_true, np.full_like(y_true, majority), labels=_ALL, average="macro", zero_division=0))
+
+
+def report_text(y_true: np.ndarray, y_pred: np.ndarray) -> str:
+    return classification_report(y_true, y_pred, labels=_ALL, target_names=LABELS, zero_division=0)
+
+
+def save_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray, out_dir: Path, title: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    precision, recall, _ = precision_recall_curve(y_true, y_proba)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.plot(recall, precision)
-    ax.set(xlabel="Recall", ylabel="Precision", title="Precision-Recall curve (test)")
-    ax.grid(alpha=0.3)
-    pr_path = out_dir / "pr_curve.png"
-    fig.savefig(pr_path, bbox_inches="tight")
-    plt.close(fig)
-
-    y_pred = (y_proba >= threshold).astype(int)
-    disp = ConfusionMatrixDisplay(confusion_matrix(y_true, y_pred, labels=[0, 1]), display_labels=["legit", "fraud"])
-    disp.plot(values_format="d")
-    disp.ax_.set_title(f"Confusion matrix (threshold={threshold:.3f})")
-    cm_path = out_dir / "confusion_matrix.png"
-    disp.figure_.savefig(cm_path, bbox_inches="tight")
+    disp = ConfusionMatrixDisplay(confusion_matrix(y_true, y_pred, labels=_ALL), display_labels=LABELS)
+    disp.plot(values_format="d", xticks_rotation=30, colorbar=False)
+    disp.ax_.set_title(title)
+    path = out_dir / "confusion_matrix.png"
+    disp.figure_.savefig(path, bbox_inches="tight")
     plt.close(disp.figure_)
-
-    return [pr_path, cm_path]
+    return path
