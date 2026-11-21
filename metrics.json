@@ -1,0 +1,15 @@
+{
+  "run_id": "395baa97d0754855b709551ecea7ac32",
+  "model_version": "1",
+  "promoted": true,
+  "quality_gate_passed": true,
+  "baseline_majority_macro_f1": 0.181021897810219,
+  "test_macro_f1": 0.2675324675324675,
+  "test_balanced_accuracy": 0.343010752688172,
+  "test_accuracy": 0.52,
+  "test_recall_safe": 0.5483870967741935,
+  "test_recall_safe_overall": 0.5,
+  "test_recall_bad_weather": 0.3333333333333333,
+  "test_recall_tandem": 0.3333333333333333,
+  "test_recall_reckless": 0.0
+}

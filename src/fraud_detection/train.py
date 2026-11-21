@@ -197,7 +197,8 @@ def run(params: dict | None = None) -> dict:
 
             # Log + register the pyfunc that follows docs/api-contract.md
             artifacts = save_artifacts(model, scaler, m, wcfg, tmp / "model_artifacts")
-            example = pd.DataFrame(test_rides[0][: wcfg["length"]], columns=FEATURE_COLUMNS)
+            # float64: the API sends JSON numbers as float64, and MLflow refuses to downcast them to float32
+            example = pd.DataFrame(test_rides[0][: wcfg["length"]], columns=FEATURE_COLUMNS).astype("float64")
             wrapper = RideClassifierPyfunc()
             model_info = mlflow.pyfunc.log_model(
                 name="model",
