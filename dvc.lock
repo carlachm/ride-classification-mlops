@@ -13,30 +13,31 @@ stages:
       size: 35532
     - path: src/fraud_detection/data.py
       hash: md5
-      md5: 2cfef00ed7b7a6c27a609e1faa9d5388
-      size: 9571
+      md5: 5af8ee2a0999859826ed4a1d587c1bad
+      size: 11797
     params:
       params.yaml:
         data:
           raw_path: data/raw/GBG500.parquet
           labels_path: data/raw/GBG500_labels.csv
           processed_dir: data/processed
+          feedback_dir: data/feedback
           test_size: 0.15
           val_size: 0.15
         seed: 42
     outs:
     - path: data/processed
       hash: md5
-      md5: cce69a3e7e88a722677c35bed676660a.dir
-      size: 19694760
+      md5: 3de0f7c020595b5ae06a2cec5bea4f25.dir
+      size: 19694812
       nfiles: 4
   train:
     cmd: python -m fraud_detection.train
     deps:
     - path: data/processed
       hash: md5
-      md5: cce69a3e7e88a722677c35bed676660a.dir
-      size: 19694760
+      md5: 3de0f7c020595b5ae06a2cec5bea4f25.dir
+      size: 19694812
       nfiles: 4
     - path: src/fraud_detection/evaluate.py
       hash: md5
@@ -48,8 +49,8 @@ stages:
       size: 6293
     - path: src/fraud_detection/train.py
       hash: md5
-      md5: 15e9b62317d172f814dba1f134ab8b7e
-      size: 10475
+      md5: dc581be372a5f47815c622d4aee22340
+      size: 10876
     params:
       params.yaml:
         model:
@@ -75,5 +76,5 @@ stages:
     outs:
     - path: metrics.json
       hash: md5
-      md5: f096dbde4b55bd8b5b8fae4ce68aa86c
+      md5: 8f089f974a36cb59bffc5e4ae9f9d782
       size: 489

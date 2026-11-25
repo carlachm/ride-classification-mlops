@@ -9,7 +9,18 @@ name: train
 
 on:
   workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why retrain? (written to the run summary and to the MLflow run)"
+        required: false
+        default: "manual"
+        type: string
   workflow_call:
+    inputs:
+      reason:
+        required: false
+        default: "called by another workflow"
+        type: string
 
 concurrency:
   group: train
@@ -27,7 +38,13 @@ jobs:
       MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI || 'http://localhost:5000' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+      # Free text: passed through the environment, never interpolated into a script (no shell injection)
+      RETRAIN_REASON: ${{ inputs.reason }}
     steps:
+      - name: Why this run
+        run: |
+          echo "### Training run" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Reason: %s\n' "$RETRAIN_REASON" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:

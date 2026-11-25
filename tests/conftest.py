@@ -30,6 +30,7 @@ def params(tmp_path, fake_data):
     p["data"]["raw_path"] = str(raw / "GBG500.parquet")
     p["data"]["labels_path"] = str(raw / "GBG500_labels.csv")
     p["data"]["processed_dir"] = str(tmp_path / "processed")
+    p["data"]["feedback_dir"] = str(tmp_path / "feedback")  # never the developer's own production rides
     p["train"]["epochs"] = 15
     p["metrics_path"] = str(tmp_path / "metrics.json")
     return p
