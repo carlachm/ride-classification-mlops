@@ -1,6 +1,8 @@
 """Drift detection and traffic simulator, on synthetic features (no real data, no model)."""
 
+import ast
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -31,6 +33,13 @@ def features(n: int, seed: int, std_factor: float = 1.0, accel_divisor: float = 
 
 def reference(n: int = 400) -> pd.DataFrame:
     return features(n, seed=1).assign(part="train")
+
+
+def test_the_evidently_script_reports_the_same_features():
+    # The script runs in its own environment (Evidently needs pandas < 3), so it cannot import this package
+    source = (Path(__file__).parent.parent / "scripts" / "evidently_report.py").read_text()
+    node = next(n for n in ast.parse(source).body if isinstance(n, ast.Assign) and n.targets[0].id == "FEATURES")
+    assert eval(compile(ast.Expression(node.value), "evidently_report", "eval")) == drift.FEATURES
 
 
 def test_psi_is_zero_on_identical_data_and_large_after_a_shift():

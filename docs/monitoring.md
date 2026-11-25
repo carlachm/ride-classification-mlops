@@ -18,8 +18,14 @@ make repro              # a champion model in the registry
 make drift-reference    # healthy reference for the drift check (data/monitoring/reference.csv)
 make api                # terminal 2: logs/predictions.jsonl and raw rides in logs/rides
 make simulate           # terminal 3: 200 normal rides, half of them with feedback
-make drift              # drift report on the last 200 predictions -> reports/drift.json
+make drift              # last 200 predictions -> reports/drift.json (verdict) + reports/drift.html (Evidently)
+make drift LOG=logs/baseline.jsonl LAST=500 REPORT=reports/baseline    # another log, another report name
 ```
+
+The **Evidently** report is for reading; the verdict and the exit code come from our own check.
+`scripts/evidently_report.py` runs in its own environment (Evidently does not import with pandas 3, which
+the project uses; versions locked in `scripts/evidently_report.py.lock`). Both reports stay out of Git: the
+HTML shows distributions of the real rides.
 
 Grafana: http://localhost:3000, dashboard *Ride classifier: 4-layer monitoring* (folder MLOps).
 Alerts: http://localhost:9090/alerts.

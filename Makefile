@@ -96,8 +96,13 @@ simulate-unit-bug:  ## Upstream bug: accelerometer sent in g
 drift-reference:  ## Build the healthy reference (after `make repro`; needs the champion model)
 	$(RUN) python -m fraud_detection.monitoring.drift reference
 
-drift:  ## Drift report on the last LAST=200 predictions (exit code 3 = drift)
-	$(RUN) python -m fraud_detection.monitoring.drift check --last $(LAST)
+LOG ?= logs/predictions.jsonl
+REPORT ?= reports/drift
+
+drift:  ## Drift verdict (JSON) + Evidently report (HTML) on the last LAST=200 predictions of LOG (exit 3 = drift)
+	$(RUN) python -m fraud_detection.monitoring.drift check --log $(LOG) --last $(LAST) --out $(REPORT).json; code=$$?; \
+	DO_NOT_TRACK=1 uv run --script scripts/evidently_report.py --log $(LOG) --last $(LAST) --out $(REPORT).html || echo "Evidently report not produced"; \
+	exit $$code
 
 # --- Retraining (docs/retraining.md) ---
 feedback-data:  ## Collect the labelled production rides into data/feedback

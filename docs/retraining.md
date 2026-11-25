@@ -10,7 +10,7 @@ make retrain-check ── drift OR accuracy drop, and new labelled rides? ──
                                                                                         ▼
                          train.yml (self-hosted): dvc pull ─▶ dvc repro ─▶ quality gate ─▶ @champion
                                                                                         │
-                                        manual step: kubectl -n ride rollout restart deploy/ride-api
+                     if promoted: manual approval (environment `production`) ─▶ restart of the API
 ```
 
 ## 1. Collect the labelled production rides
@@ -50,6 +50,7 @@ ride. Validation and test stay **frozen**, so a new model is compared with the c
 ```bash
 make retrain-check      # decision only
 make retrain            # same, then `gh workflow run train.yml` if the answer is RETRAIN
+CURRENT=logs/baseline.jsonl bash scripts/retrain_on_drift.sh   # same on another log; DRY_RUN=1 starts nothing
 ```
 
 In order:
@@ -78,9 +79,25 @@ uv run python -m fraud_detection.retraining.trigger --last 200 --allow-no-new-da
 `train.yml` writes the reason in the run summary; the training run records it (tag `retrain_reason`) with
 the number of production rides used (`n_train_feedback_rides`). The new version takes `@champion` only if it
 passes the quality gate and beats the champion's test macro-F1. The running API keeps the old model until it
-is restarted: that restart is the **manual approval**.
+is restarted.
+
+That restart is the job `deploy-champion`: it runs only if the version was promoted, and it waits for the
+**manual approval** of the GitHub environment `production`. Limit: the `@champion` alias has already moved, so
+a pod that restarts for another reason loads the new model without approval.
+
+### One-time setup of the approval (repository owner)
+
+1. *Settings > Environments > New environment* `production`, with **Required reviewers**.
+2. Only then: *Settings > Secrets and variables > Actions > Variables*, `PRODUCTION_APPROVAL` = `on`.
+
+Without the variable, `deploy-champion` is skipped. This lock matters: GitHub creates a missing environment
+with no protection, and the job would then restart the API without anybody's approval.
 
 ### One-time setup of the self-hosted runner
+
+Adding a runner to this repository needs its owner. The repository is **public**: GitHub advises against
+self-hosted runners on public repositories, because a pull request from a fork can try to run code on that
+machine. Require approval for the workflows of outside contributors, and run the runner only when needed.
 
 - a self-hosted runner registered on the repository and running, on the machine of the MLflow stack;
 - repository secrets `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY`;
