@@ -31,10 +31,11 @@ CI/CD (GitHub Actions), serving (FastAPI + Streamlit) and deployment on Kubernet
 7. [Results](#results)
 8. [Serving: API and web app](#serving-api-and-web-app)
 9. [Production: Kubernetes](#production-kubernetes)
-10. [CI/CD (GitHub Actions)](#cicd-github-actions)
-11. [Tests](#tests)
-12. [Reproducibility](#reproducibility)
-13. [Team and workflow](#team-and-workflow)
+10. [Monitoring and retraining](#monitoring-and-retraining)
+11. [CI/CD (GitHub Actions)](#cicd-github-actions)
+12. [Tests](#tests)
+13. [Reproducibility](#reproducibility)
+14. [Team and workflow](#team-and-workflow)
 
 ---
 
@@ -72,19 +73,22 @@ CI/CD (GitHub Actions), serving (FastAPI + Streamlit) and deployment on Kubernet
 │   ├── evaluate.py           #   macro-F1, per-class recall, baseline, confusion matrix
 │   ├── registry.py           #   champion promotion (alias @champion)
 │   ├── train.py              #   training + MLflow logging + registration + quality gate
-│   └── api/                  #   FastAPI app (schemas, model loading, metrics, placeholder model)
+│   ├── api/                  #   FastAPI app (schemas, model loading, metrics, placeholder model)
+│   ├── monitoring/           #   drift detection, prediction log, traffic simulator
+│   └── retraining/           #   labelled production rides, retraining trigger
 ├── webapp/                   # Streamlit app
-├── tests/                    # unit + integration tests (49)
+├── tests/                    # unit + integration tests (86)
 ├── k8s/                      # Kubernetes manifests (namespace, configmap, api, webapp)
 ├── loadtest/                 # Locust load test
 ├── docker/                   # Dockerfiles: mlflow server, api, webapp
 ├── Dockerfile                # training image (ride-train)
-├── docker-compose.yml        # dev stack: MinIO + PostgreSQL + MLflow
+├── docker-compose.yml        # dev stack: MinIO + PostgreSQL + MLflow + Prometheus + Grafana
+├── infra/                    # Prometheus (scrape, alert rules + tests), Grafana (provisioned dashboard)
 ├── .github/workflows/        # ci.yml (lint, test, images), train.yml, deploy.yml
 ├── dvc.yaml / dvc.lock       # DVC pipeline: prepare -> train
 ├── params.yaml               # ALL hyper-parameters (single source of truth)
 ├── pyproject.toml / uv.lock  # dependencies (uv)
-├── docs/api-contract.md      # interface contract: model <-> API <-> monitoring
+├── docs/                     # interface contract, monitoring, runbooks, retraining
 └── Makefile                  # shortcuts (`make help`)
 ```
 
@@ -285,6 +289,26 @@ make k8s-forward          # API on :8080, web app on :8501
 kubectl -n ride get pods
 ```
 
+## Monitoring and retraining
+
+| Layer | Watched | Alerts |
+|---|---|---|
+| Infrastructure | API up, model loaded, latency, 5xx | `ApiDown`, `ModelNotLoaded`, `LatencyP95High`, `ErrorRateHigh` |
+| Inputs | signal variability vs training, missing values, rejected rides | `InputShift`, `InputUnitSuspected`, `MissingValuesHigh`, `RejectedRidesHigh` |
+| Predictions | share of each class, confidence | `SafeShareShift` |
+| Outcome | accuracy on the feedback, missed Reckless rides | `FeedbackAccuracyDrop`, `RecklessRideMissed` |
+
+- **Prometheus** (:9090) + **Grafana** (:3000) start with `make up`; rules have unit tests (`make alerts-test`).
+- **Drift check** (`make drift`): PSI + Kolmogorov-Smirnov per ride feature, calibrated on GBG500 (the usual
+  "10 bins, one feature above 0.25" rule flags almost every batch of 100 normal rides here). It first looks for
+  **upstream bugs** (e.g. accelerometer sent in g), which must not be retrained on.
+- **Retraining** (`make retrain-check`, `make retrain`): drift **or** accuracy drop, and only with **new
+  labelled rides**; they join the train split, while validation and test stay frozen.
+- `make simulate`, `simulate-drift`, `simulate-concept-drift`, `simulate-unit-bug` reproduce each situation.
+
+Details: [docs/monitoring.md](docs/monitoring.md), [docs/runbooks.md](docs/runbooks.md),
+[docs/retraining.md](docs/retraining.md). The Kubernetes deployment is not monitored yet.
+
 ## CI/CD (GitHub Actions)
 
 ```
@@ -299,11 +323,11 @@ manual          ──▶ train  (self-hosted runner: dvc pull → dvc repro →
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` › `lint` | PR, push on `main` | `uv lock --check`, `ruff check`, `ruff format --check` |
-| `ci.yml` › `test` | PR, push on `main` | 49 pytest tests, coverage + JUnit reports as artifacts |
+| `ci.yml` › `test` | PR, push on `main` | 86 pytest tests, coverage + JUnit reports as artifacts |
 | `ci.yml` › `docker` | after lint + test | builds the training image, **smoke test** (full pipeline in the container on synthetic rides), multi-arch push (amd64 + arm64) on `main` |
 | `ci.yml` › `serving` | after lint + test | builds the API and web app images, smoke test (health, real prediction, validation, metrics), multi-arch push on `main` |
 | `deploy.yml` | CI green on `main`, or manual with a tag | deploys the commit's images on the local cluster (self-hosted runner) |
-| `train.yml` | manual / called by another workflow | retraining on the self-hosted runner with the quality gate |
+| `train.yml` | manual, `make retrain`, or called by another workflow (with a `reason`) | retraining on the self-hosted runner with the quality gate |
 
 Practices applied: actions **pinned by commit SHA**, least-privilege `permissions`, `timeout-minutes`,
 `concurrency` (a new push cancels the outdated run), install from the lockfile (`uv sync --locked`), images
@@ -313,14 +337,15 @@ no heavy training on every push, secrets only in GitHub Secrets (`DOCKERHUB_TOKE
 ## Tests
 
 ```bash
-make test       # 49 tests + coverage
+make test       # 86 tests + coverage
+make alerts-test  # unit tests of the Prometheus alert rules (Docker)
 make lint       # same checks as the CI
 ```
 
 | Level | Files | What is tested |
 |---|---|---|
-| Unit | `test_data.py`, `test_model.py`, `test_evaluate.py` | data validation (missing column, unknown label, unlabelled ride, empty channel), cleaning, split by ride without leakage, NaN filling, windowing, standardisation, output shapes, metrics vs baseline |
-| Integration | `test_train.py`, `test_api.py`, `test_webapp_client.py` | full training on synthetic rides against a throw-away MLflow store, registration + `@champion`, quality gate, the model loaded **exactly like the API does** (pyfunc, float64 input, NaN), API routes and errors, web app client |
+| Unit | `test_data.py`, `test_model.py`, `test_evaluate.py`, `test_drift.py` | data validation (missing column, unknown label, unlabelled ride, empty channel), cleaning, split by ride without leakage, NaN filling, windowing, standardisation, output shapes, metrics vs baseline |
+| Integration | `test_train.py`, `test_retraining.py`, `test_api.py`, `test_webapp_client.py` | full training on synthetic rides against a throw-away MLflow store, registration + `@champion`, quality gate, the model loaded **exactly like the API does** (pyfunc, float64 input, NaN), API routes and errors, web app client |
 | End-to-end | `scripts/smoke_test.sh`, `scripts/smoke_test_serving.sh` | the Docker images run the full pipeline / serve a real prediction (run by the CI) |
 
 The tests use synthetic rides with the GBG500 schema (`fraud_detection.data.synthetic_dataset`), so the CI never

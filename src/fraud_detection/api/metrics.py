@@ -2,7 +2,7 @@
 
 from prometheus_client import Counter, Gauge, Histogram
 
-from fraud_detection.api.schemas import CHANNELS
+from fraud_detection.api.schemas import CHANNELS, CLASSES
 
 # Layer 1: infrastructure
 REQUESTS = Counter("api_requests_total", "HTTP requests", ["endpoint", "status"])
@@ -44,3 +44,10 @@ PREDICTION_CONFIDENCE = Histogram(
 FEEDBACK = Counter("feedback_total", "True labels received", ["predicted_class", "actual_class"])
 
 MODEL_INFO = Gauge("model_info", "Model version being served", ["version"])
+
+# Export every class combination at 0 from the start: Prometheus' increase() does not count the first
+# sample of a series that appears directly with the value 1, so rare labels would be lost.
+for _predicted in CLASSES:
+    PREDICTED_CLASS.labels(predicted_class=_predicted)
+    for _actual in CLASSES:
+        FEEDBACK.labels(predicted_class=_predicted, actual_class=_actual)

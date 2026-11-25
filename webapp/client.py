@@ -63,10 +63,13 @@ def health(api_url: str, timeout: float = 5) -> dict:
         raise ApiError(f"API unreachable at {api_url}: {exc.__class__.__name__}") from exc
 
 
-def send_feedback(api_url: str, predicted_class: str, actual_class: str, timeout: float = 10) -> None:
+def send_feedback(
+    api_url: str, predicted_class: str, actual_class: str, ride_hash: str | None = None, timeout: float = 10
+) -> None:
+    """``ride_hash`` comes from the prediction: it links the label to the ride (needed to retrain)."""
     r = requests.post(
         f"{api_url.rstrip('/')}/v1/feedback",
-        json={"predicted_class": predicted_class, "actual_class": actual_class},
+        json={"predicted_class": predicted_class, "actual_class": actual_class, "ride_hash": ride_hash},
         timeout=timeout,
     )
     if r.status_code != 204:

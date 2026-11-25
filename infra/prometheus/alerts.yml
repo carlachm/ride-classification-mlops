@@ -1,0 +1,162 @@
+# Recording rules and alerts, one group per monitoring layer. Visible in Prometheus > Alerts.
+# Each alert points to its section of docs/runbooks.md. Thresholds were calibrated on GBG500 with the
+# champion model: measured baselines are in docs/monitoring.md. Unit tests: `make alerts-test`.
+groups:
+  # Mean per-ride standard deviation of each channel on the GBG500 TRAINING rides (350 rides).
+  # To recompute after a data change: data/monitoring/reference.csv (`make drift-reference`).
+  - name: ride-reference
+    rules:
+      - record: ride:reference_channel_std
+        expr: vector(0.763)
+        labels: {channel: ax}
+      - record: ride:reference_channel_std
+        expr: vector(1.059)
+        labels: {channel: ay}
+      - record: ride:reference_channel_std
+        expr: vector(0.922)
+        labels: {channel: az}
+      - record: ride:reference_channel_std
+        expr: vector(5.482)
+        labels: {channel: rx}
+      - record: ride:reference_channel_std
+        expr: vector(21.103)
+        labels: {channel: ry}
+      - record: ride:reference_channel_std
+        expr: vector(8.290)
+        labels: {channel: rz}
+
+  - name: ride-signals
+    rules:
+      - record: ride:rides:count5m
+        expr: sum(increase(input_ride_samples_count[5m]))
+      - record: ride:channel_std:mean5m
+        expr: sum by (channel) (increase(input_channel_std_sum[5m])) / sum by (channel) (increase(input_channel_std_count[5m]))
+      - record: ride:channel_std_ratio
+        expr: ride:channel_std:mean5m / on (channel) ride:reference_channel_std
+      - record: ride:missing_ratio:mean5m
+        expr: sum(increase(input_missing_ratio_sum[5m])) / sum(increase(input_missing_ratio_count[5m]))
+      - record: ride:samples:mean5m
+        expr: sum(increase(input_ride_samples_sum[5m])) / sum(increase(input_ride_samples_count[5m]))
+      - record: ride:predicted_class_share5m
+        expr: sum by (predicted_class) (increase(prediction_class_total[5m])) / scalar(sum(increase(prediction_class_total[5m])))
+      - record: ride:confidence:mean5m
+        expr: sum(increase(prediction_confidence_sum[5m])) / sum(increase(prediction_confidence_count[5m]))
+      - record: ride:feedback_count15m
+        expr: sum(increase(feedback_total[15m]))
+      # PromQL cannot compare two labels: the five "right answer" series are listed one by one
+      - record: ride:feedback_accuracy15m
+        expr: >-
+          sum(
+            increase(feedback_total{predicted_class="Safe", actual_class="Safe"}[15m])
+            or increase(feedback_total{predicted_class="Safe overall", actual_class="Safe overall"}[15m])
+            or increase(feedback_total{predicted_class="Bad weather", actual_class="Bad weather"}[15m])
+            or increase(feedback_total{predicted_class="Tandem", actual_class="Tandem"}[15m])
+            or increase(feedback_total{predicted_class="Reckless", actual_class="Reckless"}[15m])
+          ) / ride:feedback_count15m
+
+  # Layer 1: infrastructure
+  - name: ride-infrastructure
+    rules:
+      - alert: ApiDown
+        expr: max(up{job="ride-api"}) == 0
+        for: 1m
+        labels: {severity: page, layer: infra}
+        annotations:
+          summary: "The API does not answer Prometheus"
+          runbook: docs/runbooks.md#api-down
+
+      - alert: ModelNotLoaded
+        expr: up{job="ride-api"} == 1 unless on (instance) model_info
+        for: 1m
+        labels: {severity: page, layer: infra}
+        annotations:
+          summary: "The API is up but serves no model (every prediction answers 503)"
+          runbook: docs/runbooks.md#api-down
+
+      - alert: LatencyP95High
+        expr: histogram_quantile(0.95, sum by (le) (rate(api_request_duration_seconds_bucket{endpoint="/v1/predict"}[1m]))) > 0.5
+        for: 1m
+        labels: {severity: page, layer: infra}
+        annotations:
+          summary: "/v1/predict P95 above 500 ms"
+          runbook: docs/runbooks.md#latency
+
+      - alert: ErrorRateHigh
+        expr: sum(rate(api_requests_total{status=~"5.."}[1m])) / sum(rate(api_requests_total[1m])) > 0.05
+        for: 1m
+        labels: {severity: page, layer: infra}
+        annotations:
+          summary: "More than 5 % of 5xx responses"
+          runbook: docs/runbooks.md#errors
+
+  # Layer 2: inputs (data drift and upstream bugs)
+  - name: ride-inputs
+    rules:
+      - alert: RejectedRidesHigh
+        expr: >-
+          sum(rate(api_requests_total{endpoint="/v1/predict", status="422"}[5m]))
+          / sum(rate(api_requests_total{endpoint="/v1/predict"}[5m])) > 0.10
+        for: 2m
+        labels: {severity: ticket, layer: input}
+        annotations:
+          summary: "More than 10 % of the rides are rejected as invalid: the sender changed something"
+          runbook: docs/runbooks.md#upstream-bug
+
+      - alert: InputUnitSuspected
+        expr: (ride:channel_std_ratio > 4 or ride:channel_std_ratio < 0.25) and on () (ride:rides:count5m >= 5)
+        for: 1m
+        labels: {severity: page, layer: input}
+        annotations:
+          summary: "Channel {{ $labels.channel }} is {{ $value | humanize }}x its usual variability: unit bug or dead sensor"
+          runbook: docs/runbooks.md#upstream-bug
+
+      # Moderate shifts only: beyond 4x it is InputUnitSuspected, which must not be read as drift
+      - alert: InputShift
+        expr: >-
+          ((ride:channel_std_ratio > 1.25) <= 4 or (ride:channel_std_ratio < 0.8) >= 0.25)
+          and on () (ride:rides:count5m >= 30)
+        for: 2m
+        labels: {severity: ticket, layer: input}
+        annotations:
+          summary: "Channel {{ $labels.channel }} is {{ $value | humanize }}x its usual variability: possible data drift"
+          runbook: docs/runbooks.md#drift
+
+      - alert: MissingValuesHigh
+        expr: ride:missing_ratio:mean5m > 0.05 and on () (ride:rides:count5m >= 30)
+        for: 2m
+        labels: {severity: ticket, layer: input}
+        annotations:
+          summary: "More than 5 % of sensor values are missing (usual: below 1 %)"
+          runbook: docs/runbooks.md#upstream-bug
+
+  # Layer 3: predictions
+  - name: ride-predictions
+    rules:
+      - alert: SafeShareShift
+        expr: >-
+          (ride:predicted_class_share5m{predicted_class="Safe"} < 0.3
+           or ride:predicted_class_share5m{predicted_class="Safe"} > 0.75)
+          and on () (ride:rides:count5m >= 50)
+        for: 2m
+        labels: {severity: ticket, layer: prediction}
+        annotations:
+          summary: "Share of rides predicted Safe is {{ $value | humanizePercentage }}, outside the usual band"
+          runbook: docs/runbooks.md#drift
+
+  # Layer 4: business outcome (labels received later)
+  - name: ride-outcome
+    rules:
+      - alert: FeedbackAccuracyDrop
+        expr: ride:feedback_accuracy15m < 0.35 and on () (ride:feedback_count15m >= 50)
+        for: 5m
+        labels: {severity: ticket, layer: outcome}
+        annotations:
+          summary: "Accuracy on the labels received in 15 min is {{ $value | humanizePercentage }} (below 35 %)"
+          runbook: docs/runbooks.md#performance
+
+      - alert: RecklessRideMissed
+        expr: sum(increase(feedback_total{actual_class="Reckless", predicted_class!="Reckless"}[15m])) > 0.5
+        labels: {severity: ticket, layer: outcome}
+        annotations:
+          summary: "A ride confirmed Reckless was predicted as something else"
+          runbook: docs/runbooks.md#performance
