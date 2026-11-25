@@ -25,7 +25,8 @@ from prometheus_client import make_asgi_app
 
 from fraud_detection.api import metrics as m
 from fraud_detection.api import model_store
-from fraud_detection.api.features import ride_summary
+from fraud_detection.api.features import ride_fingerprint, ride_summary
+from fraud_detection.api.ride_store import save_ride
 from fraud_detection.api.schemas import CHANNELS, CLASSES, Feedback, Health, Prediction, Ride
 
 logger = logging.getLogger("fraud_detection.api")
@@ -120,6 +121,8 @@ def predict(ride: Ride) -> Prediction:
         raise HTTPException(status_code=500, detail=f"Model returned {proba.shape}, expected ({len(CLASSES)},)")
     best = int(proba.argmax())
     summary = ride_summary(frame.to_numpy())
+    ride_hash = ride_fingerprint(frame.to_numpy())
+    save_ride(frame, ride_hash)
 
     m.INPUT_SAMPLES.observe(len(frame))
     m.INPUT_MISSING_RATIO.observe(float(frame.isna().to_numpy().mean()))
@@ -133,6 +136,7 @@ def predict(ride: Ride) -> Prediction:
             "ts": datetime.now(UTC).isoformat(),
             "event": "prediction",
             "ride_id": ride.ride_id,
+            "ride_hash": ride_hash,
             "n_samples": len(frame),
             **{k: round(v, 6) for k, v in summary.items()},
             "predicted_class": CLASSES[best],
@@ -148,6 +152,7 @@ def predict(ride: Ride) -> Prediction:
         probabilities={c: float(p) for c, p in zip(CLASSES, proba, strict=True)},
         n_samples=len(frame),
         model_version=loaded.version,
+        ride_hash=ride_hash,
     )
 
 

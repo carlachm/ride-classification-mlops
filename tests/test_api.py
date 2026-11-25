@@ -4,10 +4,12 @@ import json
 
 import mlflow
 import numpy as np
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 from fraud_detection.api import dummy_model, main
+from fraud_detection.api.features import ride_fingerprint
 from fraud_detection.api.schemas import CHANNELS, CLASSES, MIN_SAMPLES
 
 
@@ -107,6 +109,46 @@ def test_feedback_updates_outcome_counter(client):
 def test_feedback_with_unknown_class_is_rejected(client):
     r = client.post("/v1/feedback", json={"predicted_class": "Safe", "actual_class": "Banana"})
     assert r.status_code == 422
+
+
+def test_feedback_is_linked_to_the_scored_ride(client, tmp_path):
+    ride_hash = client.post("/v1/predict", json=make_ride()).json()["ride_hash"]
+    other = client.post("/v1/predict", json=make_ride(seed=1)).json()["ride_hash"]
+    assert ride_hash != other and len(ride_hash) == 32
+
+    feedback = {"predicted_class": "Safe", "actual_class": "Reckless", "ride_hash": ride_hash}
+    assert client.post("/v1/feedback", json=feedback).status_code == 204
+    lines = [json.loads(x) for x in (tmp_path / "logs" / "predictions.jsonl").read_text().splitlines()]
+    assert lines[0]["ride_hash"] == ride_hash == lines[-1]["ride_hash"] and lines[-1]["event"] == "feedback"
+
+
+@pytest.mark.parametrize("bad", ["../../etc/passwd", "ABC", "g" * 32, ""])
+def test_feedback_with_a_malformed_ride_hash_is_rejected(client, bad):
+    r = client.post("/v1/feedback", json={"predicted_class": "Safe", "actual_class": "Safe", "ride_hash": bad})
+    assert r.status_code == 422
+
+
+def test_raw_ride_is_stored_only_when_enabled(client, tmp_path, monkeypatch):
+    monkeypatch.delenv("RIDE_STORE_DIR", raising=False)
+    client.post("/v1/predict", json=make_ride())
+    assert not (tmp_path / "rides").exists()
+
+    monkeypatch.setenv("RIDE_STORE_DIR", str(tmp_path / "rides"))
+    ride_hash = client.post("/v1/predict", json=make_ride()).json()["ride_hash"]
+    stored = pd.read_parquet(tmp_path / "rides" / f"{ride_hash}.parquet")
+    assert list(stored.columns) == CHANNELS and len(stored) == 300
+    assert ride_fingerprint(stored.to_numpy()) == ride_hash  # same id after the float32 round trip
+
+
+def test_a_broken_ride_store_does_not_break_predictions(client, tmp_path, monkeypatch):
+    (tmp_path / "not-a-dir").write_text("x")
+    monkeypatch.setenv("RIDE_STORE_DIR", str(tmp_path / "not-a-dir"))
+    assert client.post("/v1/predict", json=make_ride()).status_code == 200
+
+
+def test_every_feedback_combination_is_exported_from_the_start(client):
+    text = client.get("/metrics/").text
+    assert 'feedback_total{actual_class="Tandem",predicted_class="Bad weather"}' in text
 
 
 def test_api_degrades_safely_without_model(monkeypatch, tmp_path):
