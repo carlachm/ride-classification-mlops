@@ -79,7 +79,7 @@ if result:
     actual = st.selectbox("Actual class", CLASSES, index=CLASSES.index(result["predicted_class"]))
     if st.button("Send feedback"):
         try:
-            client.send_feedback(api_url, result["predicted_class"], actual)
+            client.send_feedback(api_url, result["predicted_class"], actual, ride_hash=result.get("ride_hash"))
             st.success("Feedback recorded")
         except client.ApiError as exc:
             st.error(str(exc))

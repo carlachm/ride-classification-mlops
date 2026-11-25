@@ -1,10 +1,24 @@
-"""Per-ride summary of the IMU signal, shared by the dummy model, the API log and the monitoring."""
+"""Per-ride summary and fingerprint of the IMU signal, shared by the API log, the monitoring and the retraining."""
 
 from __future__ import annotations
+
+import hashlib
 
 import numpy as np
 
 from fraud_detection.api.schemas import CHANNELS
+
+
+def ride_fingerprint(x: np.ndarray) -> str:
+    """Content hash of one ride (n_samples, 6): the same signal always gives the same 32-character id.
+
+    It links a feedback to the ride that was scored, and lets the retraining recognise a ride that is
+    already in the validation / test sets. Values are cast to float32 and rounded first, so that the
+    raw file (float64), the processed splits (float32) and a JSON round trip give the same id.
+    """
+    y = np.round(np.asarray(x, dtype=np.float32).astype("<f8"), 3) + 0.0  # + 0.0 turns -0.0 into 0.0
+    y[np.isnan(y)] = np.nan  # one single bit pattern for missing values
+    return hashlib.sha256(y.tobytes()).hexdigest()[:32]
 
 
 def ride_summary(x: np.ndarray) -> dict[str, float]:

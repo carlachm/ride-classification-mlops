@@ -14,11 +14,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+from fraud_detection.api.features import ride_fingerprint
 from fraud_detection.config import (
     FEATURE_COLUMNS,
     LABELS,
@@ -32,6 +34,9 @@ from fraud_detection.config import (
 logger = logging.getLogger(__name__)
 
 SAMPLING_STEP_MS = 100  # 10 Hz
+FEEDBACK_RIDES_FILE = "rides.parquet"
+FEEDBACK_LABELS_FILE = "labels.csv"
+FEEDBACK_PREFIX = "fb-"  # ride_id of the labelled production rides
 
 
 # --------------------------------------------------------------------------- #
@@ -110,6 +115,44 @@ def split_rides(labels: pd.DataFrame, test_size: float, val_size: float, seed: i
     return {name: sorted(part[RIDE_COLUMN]) for name, part in {"train": train, "val": val, "test": test}.items()}
 
 
+def read_feedback(directory: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    """(samples, labels) of the labelled production rides (docs/retraining.md), or None if there are none."""
+    rides, labels = directory / FEEDBACK_RIDES_FILE, directory / FEEDBACK_LABELS_FILE
+    if not rides.exists() and not labels.exists():
+        return None
+    return pd.read_parquet(rides), pd.read_csv(labels)
+
+
+def add_feedback_rides(parts: dict[str, pd.DataFrame], params: dict) -> tuple[pd.DataFrame, dict]:
+    """The train split plus the labelled production rides. Validation and test never change.
+
+    They stay the frozen reference on which a retrained model is compared with the champion, so a
+    production ride whose signal is already in one of the splits is dropped (no leakage, no duplicate).
+    """
+    directory = params["data"].get("feedback_dir")
+    feedback = read_feedback(PROJECT_ROOT / directory) if directory else None
+    if feedback is None:
+        return parts["train"], {"n_feedback_rides": 0, "n_feedback_dropped": 0}
+
+    samples, labels = feedback
+    labels = labels.rename(columns={"RIDE_ID": RIDE_COLUMN, "LABEL": TARGET_COLUMN})
+    validate(samples, labels)
+    samples = clean(samples)
+    known = {
+        ride_fingerprint(ride[FEATURE_COLUMNS].to_numpy())
+        for part in parts.values()
+        for _, ride in part.groupby(RIDE_COLUMN)
+    }
+    keep = [
+        ride_id
+        for ride_id, ride in samples.groupby(RIDE_COLUMN)
+        if ride_fingerprint(ride[FEATURE_COLUMNS].to_numpy()) not in known
+    ]
+    new = samples[samples[RIDE_COLUMN].isin(keep)].merge(labels[[RIDE_COLUMN, TARGET_COLUMN]], on=RIDE_COLUMN)
+    train = pd.concat([parts["train"], new[parts["train"].columns]], ignore_index=True)
+    return train, {"n_feedback_rides": len(keep), "n_feedback_dropped": samples[RIDE_COLUMN].nunique() - len(keep)}
+
+
 def prepare(params: dict) -> dict:
     """Load, validate, clean and split the data; save one parquet per split."""
     out_dir = PROJECT_ROOT / params["data"]["processed_dir"]
@@ -129,11 +172,13 @@ def prepare(params: dict) -> dict:
         "missing_ratio": round(float(samples[FEATURE_COLUMNS].isna().to_numpy().mean()), 6),
         "class_counts": labels[TARGET_COLUMN].value_counts().reindex(LABELS, fill_value=0).to_dict(),
     }
-    for name, ride_ids in splits.items():
-        part = data[data[RIDE_COLUMN].isin(ride_ids)]
+    parts = {name: data[data[RIDE_COLUMN].isin(ride_ids)] for name, ride_ids in splits.items()}
+    parts["train"], feedback_stats = add_feedback_rides(parts, params)
+    stats |= feedback_stats
+    for name, part in parts.items():
         part.to_parquet(out_dir / f"{name}.parquet", index=False)
         per_ride = part.drop_duplicates(RIDE_COLUMN)[TARGET_COLUMN]
-        stats[f"n_rides_{name}"] = len(ride_ids)
+        stats[f"n_rides_{name}"] = len(per_ride)
         stats[f"class_counts_{name}"] = per_ride.value_counts().reindex(LABELS, fill_value=0).to_dict()
 
     (out_dir / "data_stats.json").write_text(json.dumps(stats, indent=2))

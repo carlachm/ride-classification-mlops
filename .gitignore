@@ -7,6 +7,12 @@
 !/data/raw/*.dvc
 !/data/raw/.gitignore
 /data/processed/
+/data/monitoring/
+/data/feedback/
+
+# Runtime outputs of the API and the monitoring (never committed)
+/logs/
+/reports/
 
 # MLflow local store (when no server is used)
 mlruns/

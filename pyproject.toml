@@ -18,6 +18,7 @@ dependencies = [
     "fastapi>=0.165.0",
     "uvicorn[standard]>=0.54.0",
     "prometheus-client>=0.26.0",
+    "scipy>=1.18",
 ]
 
 # What you need to DEVELOP (synced by default with `uv sync`,

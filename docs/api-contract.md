@@ -44,12 +44,19 @@ Any value may be `null` (sensor dropout), but a channel that is `null` for the w
 ```json
 { "ride_id": "optional-id", "predicted_class": "Safe", "confidence": 0.62,
   "probabilities": {"Safe": 0.62, "Safe overall": 0.1, "Bad weather": 0.1, "Tandem": 0.1, "Reckless": 0.08},
-  "n_samples": 2349, "model_version": "3" }
+  "n_samples": 2349, "model_version": "3", "ride_hash": "9f2c0a...(32 hex characters)" }
 ```
+
+`ride_hash` is a fingerprint of the signal (same samples, same value).
 
 Errors: 422 invalid input, 503 no model loaded.
 
-`POST /v1/feedback`: `{"predicted_class": "Safe", "actual_class": "Reckless"}` (both must be known classes).
+`POST /v1/feedback`: `{"predicted_class": "Safe", "actual_class": "Reckless", "ride_hash": "9f2c0a..."}`
+(both classes must be known). `ride_hash` is **optional** (older clients still work), but without it the label only
+feeds the metrics: it cannot be used for retraining.
+
+When `RIDE_STORE_DIR` is set, the API also keeps the raw signal of each scored ride in
+`<RIDE_STORE_DIR>/<ride_hash>.parquet` (needed to retrain; see [retraining.md](retraining.md)). It is off by default.
 
 ## 3. Prediction log (API → Ugo)
 
@@ -57,11 +64,12 @@ One JSON line per event in the file given by `PREDICTION_LOG_PATH` (`/app/logs/p
 also written to stdout).
 
 ```json
-{"ts": "2026-11-20T10:00:00+00:00", "event": "prediction", "ride_id": "r-1", "n_samples": 2349,
+{"ts": "2026-11-20T10:00:00+00:00", "event": "prediction", "ride_id": "r-1", "ride_hash": "9f2c0a...",
+ "n_samples": 2349,
  "ax_mean": 0.1, "ax_std": 1.2, "ay_mean": -9.1, "ay_std": 0.9, "...": "same for az, rx, ry, rz",
  "predicted_class": "Safe", "probabilities": {"Safe": 0.62, "...": 0.1},
  "model_version": "3", "inference_ms": 12.3}
-{"ts": "...", "event": "feedback", "predicted_class": "Safe", "actual_class": "Reckless"}
+{"ts": "...", "event": "feedback", "predicted_class": "Safe", "actual_class": "Reckless", "ride_hash": "9f2c0a..."}
 ```
 
 The `<channel>_mean` / `<channel>_std` columns are the per-ride features used for **drift detection** (compare them to

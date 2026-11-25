@@ -9,6 +9,8 @@ data:
   raw_path: data/raw/GBG500.parquet
   labels_path: data/raw/GBG500_labels.csv
   processed_dir: data/processed
+  # Labelled production rides collected for retraining (added to the train split only, if present)
+  feedback_dir: data/feedback
   # Split BY RIDE (never by sample) and stratified on the 5 classes
   test_size: 0.15
   val_size: 0.15
@@ -44,3 +46,26 @@ mlflow:
 # (macro-F1 ~0.18 on the GBG500 test rides).
 quality_gate:
   min_test_macro_f1: 0.20
+
+# Drift detection on the per-ride features logged by the API (values justified in docs/monitoring.md).
+drift:
+  reference_path: data/monitoring/reference.csv
+  # 5 bins and 2 features required: with 10 bins and 1 feature, almost every batch of 100 NORMAL rides
+  # of GBG500 would be declared drifted.
+  bins: 5
+  psi_alert: 0.10
+  psi_retrain: 0.25
+  ks_alpha: 0.01            # divided by the number of features (Bonferroni)
+  min_drifted_features: 2
+  min_rides: 100            # below this, no verdict
+  # Plausibility checks: an upstream bug is fixed at the source, never by retraining
+  unit_ratio: 4.0           # a channel varying 4x more or 4x less than usual
+  gravity_range: [7.0, 12.0]  # m/s², norm of the mean acceleration (GBG500: ~9.4)
+
+# Retraining trigger (docs/retraining.md)
+retraining:
+  min_new_rides: 20             # labelled production rides the last training run has not seen
+  min_feedback: 50              # below this, performance is not judged
+  min_feedback_accuracy: 0.35   # champion test accuracy is 0.52; ~2.5 standard errors below it with 50 labels
+  # ride_id prefixes of test traffic, never used for training (simulator, web app demo, load and smoke tests)
+  excluded_ride_id_prefixes: ["sim-", "demo", "load-", "smoke", "deploy-check"]

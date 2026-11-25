@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -160,8 +161,14 @@ def run(params: dict | None = None) -> dict:
         mlflow.log_params(_flatten({k: params[k] for k in ("seed", "data", "windows", "model", "train")}))
 
         stats_path = PROJECT_ROOT / params["data"]["processed_dir"] / "data_stats.json"
+        data_stats = {}
         if stats_path.exists():
             mlflow.log_artifact(str(stats_path), artifact_path="data")
+            data_stats = json.loads(stats_path.read_text())
+        # How many labelled production rides this run has seen: the retraining trigger reads it
+        mlflow.log_param("n_train_feedback_rides", data_stats.get("n_feedback_rides", 0))
+        if os.getenv("RETRAIN_REASON"):
+            mlflow.set_tag("retrain_reason", os.environ["RETRAIN_REASON"][:500])
 
         scaler = Standardizer.fit(train_rides)
         train_ds = windows_dataset(train_rides, y_train, scaler, wcfg)

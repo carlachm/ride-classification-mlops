@@ -1,0 +1,99 @@
+# Unit tests of the alert rules, without waiting for real traffic: `make alerts-test`.
+# Series are written as "start+increment x steps"; one step is 15 s. 5 rides arrive per step.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  - name: normal traffic raises nothing
+    interval: 15s
+    input_series:
+      - {series: 'up{job="ride-api", instance="a"}', values: '1x60'}
+      - {series: 'model_info{instance="a", version="1"}', values: '1x60'}
+      - {series: 'input_ride_samples_count{instance="a"}', values: '0+5x60'}
+      - {series: 'input_channel_std_sum{channel="ax", instance="a"}', values: '0+3.815x60'}
+      - {series: 'input_channel_std_count{channel="ax", instance="a"}', values: '0+5x60'}
+      - {series: 'input_channel_std_sum{channel="ry", instance="a"}', values: '0+105.5x60'}
+      - {series: 'input_channel_std_count{channel="ry", instance="a"}', values: '0+5x60'}
+      - {series: 'prediction_class_total{predicted_class="Safe", instance="a"}', values: '0+3x60'}
+      - {series: 'prediction_class_total{predicted_class="Bad weather", instance="a"}', values: '0+2x60'}
+      - {series: 'feedback_total{predicted_class="Safe", actual_class="Safe", instance="a"}', values: '0+3x60'}
+      - {series: 'feedback_total{predicted_class="Bad weather", actual_class="Safe", instance="a"}', values: '0+2x60'}
+    promql_expr_test:
+      - {expr: 'ALERTS{alertstate="firing"}', eval_time: 14m, exp_samples: []}
+      - expr: ride:feedback_accuracy15m
+        eval_time: 14m
+        exp_samples: [{labels: 'ride:feedback_accuracy15m', value: 0.6}]
+
+  - name: accelerometer sent in g
+    interval: 15s
+    input_series:
+      - {series: 'input_ride_samples_count{instance="a"}', values: '0+5x40'}
+      - {series: 'input_channel_std_sum{channel="ax", instance="a"}', values: '0+0.39x40'}
+      - {series: 'input_channel_std_count{channel="ax", instance="a"}', values: '0+5x40'}
+    promql_expr_test:
+      - expr: count by (channel) (ALERTS{alertname="InputUnitSuspected", alertstate="firing"})
+        eval_time: 8m
+        exp_samples: [{labels: '{channel="ax"}', value: 1}]
+      - {expr: 'ALERTS{alertname="InputShift"}', eval_time: 8m, exp_samples: []}
+
+  - name: rougher rides are a shift, not a unit bug
+    interval: 15s
+    input_series:
+      - {series: 'input_ride_samples_count{instance="a"}', values: '0+5x40'}
+      - {series: 'input_channel_std_sum{channel="ay", instance="a"}', values: '0+7.41x40'}
+      - {series: 'input_channel_std_count{channel="ay", instance="a"}', values: '0+5x40'}
+    promql_expr_test:
+      - expr: count by (channel) (ALERTS{alertname="InputShift", alertstate="firing"})
+        eval_time: 8m
+        exp_samples: [{labels: '{channel="ay"}', value: 1}]
+      - {expr: 'ALERTS{alertname="InputUnitSuspected"}', eval_time: 8m, exp_samples: []}
+
+  - name: too few rides to judge a shift
+    interval: 15s
+    input_series:
+      # one ride every 4 steps: 5 rides in 5 minutes
+      - {series: 'input_ride_samples_count{instance="a"}', values: '0+0.25x40'}
+      - {series: 'input_channel_std_sum{channel="ay", instance="a"}', values: '0+0.37x40'}
+      - {series: 'input_channel_std_count{channel="ay", instance="a"}', values: '0+0.25x40'}
+    promql_expr_test:
+      - {expr: 'ALERTS{alertname="InputShift"}', eval_time: 8m, exp_samples: []}
+
+  - name: accuracy drop on the feedback
+    interval: 15s
+    input_series:
+      - {series: 'feedback_total{predicted_class="Safe", actual_class="Safe", instance="a"}', values: '0+1x60'}
+      - {series: 'feedback_total{predicted_class="Safe", actual_class="Tandem", instance="a"}', values: '0+4x60'}
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="FeedbackAccuracyDrop", alertstate="firing"})
+        eval_time: 12m
+        exp_samples: [{labels: '{}', value: 1}]
+
+  - name: a missed reckless ride raises a ticket
+    interval: 15s
+    input_series:
+      - {series: 'feedback_total{predicted_class="Safe", actual_class="Reckless", instance="a"}', values: '0x4 1x30'}
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="RecklessRideMissed", alertstate="firing"})
+        eval_time: 5m
+        exp_samples: [{labels: '{}', value: 1}]
+
+  - name: API down
+    interval: 15s
+    input_series:
+      - {series: 'up{job="ride-api", instance="a"}', values: '0x20'}
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="ApiDown", alertstate="firing"})
+        eval_time: 3m
+        exp_samples: [{labels: '{}', value: 1}]
+
+  - name: API up without a model
+    interval: 15s
+    input_series:
+      - {series: 'up{job="ride-api", instance="a"}', values: '1x20'}
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="ModelNotLoaded", alertstate="firing"})
+        eval_time: 3m
+        exp_samples: [{labels: '{}', value: 1}]
+      - {expr: 'ALERTS{alertname="ApiDown"}', eval_time: 3m, exp_samples: []}

@@ -1,8 +1,10 @@
-# Local "dev" environment: MinIO (S3) + PostgreSQL + MLflow server
+# Local "dev" environment: MinIO (S3) + PostgreSQL + MLflow server + Prometheus + Grafana
 #   docker compose up -d --build
 #   MLflow UI    -> http://localhost:5000
 #   MinIO console-> http://localhost:9001  (user/pwd from .env)
-# The API / web app / Airflow services will be added in the next sessions.
+#   Prometheus   -> http://localhost:9090  (alerts: /alerts)
+#   Grafana      -> http://localhost:3000  (read-only without login; admin password: GRAFANA_PASSWORD, default admin)
+# Prometheus scrapes the API started on the host with `make api` (docs/monitoring.md).
 
 services:
   minio:
@@ -76,6 +78,39 @@ services:
       timeout: 5s
       retries: 10
 
+  # Collects the API metrics and evaluates the alert rules
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./infra/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Linux; built in with Docker Desktop
+
+  # Draws the dashboard "Ride classifier: 4-layer monitoring" (provisioned from infra/grafana)
+  grafana:
+    image: grafana/grafana:12.0.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports:
+      - "127.0.0.1:3000:3000" # local only: default password and anonymous access
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   minio_data:
   postgres_data:
+  prometheus_data:
+  grafana_data:

@@ -46,6 +46,7 @@ class Prediction(BaseModel):
     probabilities: dict[str, float] = Field(..., description="One probability per class, summing to 1")
     n_samples: int
     model_version: str
+    ride_hash: str = Field(..., description="Fingerprint of the signal: send it back with the feedback")
 
 
 class Feedback(BaseModel):
@@ -53,6 +54,11 @@ class Feedback(BaseModel):
 
     predicted_class: str
     actual_class: str
+    ride_hash: str | None = Field(
+        None,
+        pattern=r"^[0-9a-f]{32}$",  # also used as a file name by the retraining: nothing else is accepted
+        description="`ride_hash` of the prediction. Without it the label cannot be used for retraining",
+    )
 
 
 class Health(BaseModel):
