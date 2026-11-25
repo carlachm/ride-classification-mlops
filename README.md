@@ -302,12 +302,14 @@ kubectl -n ride get pods
 - **Drift check** (`make drift`): PSI + Kolmogorov-Smirnov per ride feature, calibrated on GBG500 (the usual
   "10 bins, one feature above 0.25" rule flags almost every batch of 100 normal rides here). It first looks for
   **upstream bugs** (e.g. accelerometer sent in g), which must not be retrained on.
+- **Reports**: `make drift` also writes an **Evidently** HTML report (`scripts/evidently_report.py`, own environment).
 - **Retraining** (`make retrain-check`, `make retrain`): drift **or** accuracy drop, and only with **new
   labelled rides**; they join the train split, while validation and test stay frozen.
 - `make simulate`, `simulate-drift`, `simulate-concept-drift`, `simulate-unit-bug` reproduce each situation.
 
 Details: [docs/monitoring.md](docs/monitoring.md), [docs/runbooks.md](docs/runbooks.md),
-[docs/retraining.md](docs/retraining.md). The Kubernetes deployment is not monitored yet.
+[docs/retraining.md](docs/retraining.md), and the S7 lab report [docs/s7-report.md](docs/s7-report.md).
+The Kubernetes deployment is not monitored yet.
 
 ## CI/CD (GitHub Actions)
 
@@ -327,7 +329,7 @@ manual          ──▶ train  (self-hosted runner: dvc pull → dvc repro →
 | `ci.yml` › `docker` | after lint + test | builds the training image, **smoke test** (full pipeline in the container on synthetic rides), multi-arch push (amd64 + arm64) on `main` |
 | `ci.yml` › `serving` | after lint + test | builds the API and web app images, smoke test (health, real prediction, validation, metrics), multi-arch push on `main` |
 | `deploy.yml` | CI green on `main`, or manual with a tag | deploys the commit's images on the local cluster (self-hosted runner) |
-| `train.yml` | manual, `make retrain`, or called by another workflow (with a `reason`) | retraining on the self-hosted runner with the quality gate |
+| `train.yml` | manual, `make retrain`, or called by another workflow (with a `reason`) | retraining on the self-hosted runner with the quality gate; a promoted model reaches the API only after a manual approval (environment `production`) |
 
 Practices applied: actions **pinned by commit SHA**, least-privilege `permissions`, `timeout-minutes`,
 `concurrency` (a new push cancels the outdated run), install from the lockfile (`uv sync --locked`), images

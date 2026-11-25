@@ -34,6 +34,8 @@ jobs:
     name: train
     runs-on: self-hosted
     timeout-minutes: 60
+    outputs:
+      promoted: ${{ steps.gate.outputs.promoted }}
     env:
       MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI || 'http://localhost:5000' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY }}
@@ -57,6 +59,9 @@ jobs:
           uv run --no-sync dvc pull
       - name: Prepare + train (exits 1 if the quality gate fails)
         run: uv run --no-sync dvc repro --force
+      - name: Was the new version promoted?
+        id: gate
+        run: uv run --no-sync python -c "import json; print('promoted=' + str(json.load(open('metrics.json'))['promoted']).lower())" >> "$GITHUB_OUTPUT"
       - name: Metrics
         if: always()
         run: |
@@ -64,3 +69,26 @@ jobs:
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           cat metrics.json >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # Manual approval before the new model reaches the API: the API loads @champion at startup, so
+  # "deploying" a promoted model is restarting it. Setup by the repository OWNER, in this order:
+  #   1. Settings > Environments > production > Required reviewers
+  #   2. Settings > Secrets and variables > Actions > variable PRODUCTION_APPROVAL = on
+  # The variable is a lock: without it the job is skipped. GitHub creates a missing environment with
+  # NO protection, which would restart the API without anybody's approval.
+  deploy:
+    name: deploy-champion
+    needs: train
+    if: needs.train.outputs.promoted == 'true' && vars.PRODUCTION_APPROVAL == 'on'
+    runs-on: self-hosted
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Restart the API so that it loads the new champion
+        run: |
+          kubectl -n ride rollout restart deployment/ride-api
+          if ! kubectl -n ride rollout status deployment/ride-api --timeout=300s; then
+            kubectl -n ride rollout undo deployment/ride-api
+            exit 1
+          fi
+          echo "### API restarted with the approved model :rocket:" >> "$GITHUB_STEP_SUMMARY"
