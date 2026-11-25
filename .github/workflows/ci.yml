@@ -26,7 +26,7 @@ permissions:
 
 env:
   UV_VERSION: "0.13.5"
-  IMAGE_NAME: fraud-detection-train
+  IMAGE_NAME: ride-train
   API_IMAGE_NAME: ride-api
   WEB_IMAGE_NAME: ride-webapp
 

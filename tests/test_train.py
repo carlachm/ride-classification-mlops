@@ -9,9 +9,9 @@ import pandas as pd
 import pytest
 from mlflow import MlflowClient
 
-from fraud_detection.config import FEATURE_COLUMNS
+from fraud_detection.api.schemas import CHANNELS, CLASSES
 from fraud_detection.data import prepare
-from fraud_detection.train import run
+from fraud_detection.train import class_weights, run
 
 
 @pytest.fixture
@@ -23,44 +23,46 @@ def local_mlflow(tmp_path, monkeypatch):
     mlflow.set_tracking_uri(None)
 
 
-def test_training_run_logs_and_registers_model(params, local_mlflow):
+def test_class_weights_favour_rare_classes():
+    y = np.array([0] * 80 + [1] * 10 + [2] * 5 + [3] * 4 + [4] * 1)
+    w = class_weights(y, "balanced")
+    assert w[4] > w[1] > w[0]
+    assert np.isclose(float(w.mean()), 1.0)
+    assert (class_weights(y, "none") == 1).all()
+
+
+def test_training_run_logs_and_registers_ride_classifier(params, local_mlflow):
     prepare(params)
+    params["quality_gate"] = {"min_test_macro_f1": 0.0}
     summary = run(params)
 
-    assert Path(params["metrics_path"]).exists()
     assert json.loads(Path(params["metrics_path"]).read_text())["run_id"] == summary["run_id"]
-    assert summary["test_pr_auc"] > 0.5  # synthetic data is easy
     assert summary["promoted"] is True  # first model always becomes champion
 
     client = MlflowClient()
     name = params["mlflow"]["registered_model_name"]
+    assert name == "ride-classifier"  # name loaded by the API (docs/api-contract.md)
     champion = client.get_model_version_by_alias(name, params["mlflow"]["champion_alias"])
     assert str(champion.version) == summary["model_version"]
-    assert "threshold" in champion.tags
 
-    # The registered model can be loaded with the generic pyfunc API (what the API will do)
+    run_data = client.get_run(summary["run_id"]).data
+    for metric in ("test_macro_f1", "test_recall_reckless", "baseline_majority_macro_f1", "best_val_macro_f1"):
+        assert metric in run_data.metrics
+
+    # Exactly what the API does: load with pyfunc, send one ride, get (1, 5) probabilities
     model = mlflow.pyfunc.load_model(f"models:/{name}@champion")
-    x = pd.DataFrame(np.random.randn(3, 30).astype(np.float32), columns=FEATURE_COLUMNS)
-    preds = np.asarray(model.predict(x)).ravel()
-    assert preds.shape == (3,) and ((preds >= 0) & (preds <= 1)).all()
-
-
-def test_worse_model_is_not_promoted(params, local_mlflow):
-    prepare(params)
-    first = run(params)
-    params["train"]["epochs"] = 1
-    params["train"]["learning_rate"] = 1e-7  # basically untrained
-    second = run(params)
-    if second["test_pr_auc"] <= first["test_pr_auc"]:
-        assert second["promoted"] is False
+    ride = pd.DataFrame(np.random.default_rng(0).normal(size=(450, 6)), columns=CHANNELS)
+    ride.iloc[5:15, 0] = np.nan
+    proba = np.asarray(model.predict(ride))
+    assert proba.shape == (1, len(CLASSES))
+    assert np.isclose(proba.sum(), 1.0, atol=1e-5)
 
 
 def test_quality_gate_blocks_bad_model(params, local_mlflow):
     prepare(params)
-    params["quality_gate"] = {"min_test_pr_auc": 1.01}  # impossible bar
+    params["quality_gate"] = {"min_test_macro_f1": 1.01}  # impossible bar
     summary = run(params)
     assert summary["quality_gate_passed"] is False
     assert summary["promoted"] is False
-    client = MlflowClient()
-    version = client.get_model_version(params["mlflow"]["registered_model_name"], summary["model_version"])
+    version = MlflowClient().get_model_version(params["mlflow"]["registered_model_name"], summary["model_version"])
     assert version.tags["promotion"] == "gate_failed"

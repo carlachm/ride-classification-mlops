@@ -1,1 +1,1 @@
-"""Scoring API (FastAPI): serves the registered fraud model."""
+"""Scoring API (FastAPI): serves the registered ride classifier (ride-classifier@champion)."""

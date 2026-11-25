@@ -11,13 +11,19 @@ import numpy as np
 import torch
 import yaml
 
+from fraud_detection.api.schemas import CHANNELS, CLASSES
+
 # Relative paths in params.yaml are resolved from the directory the commands are
 # launched from (the repo root, like DVC does). Override with PROJECT_ROOT if needed.
 PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", Path.cwd())).resolve()
 DEFAULT_PARAMS_PATH = PROJECT_ROOT / "params.yaml"
 
-FEATURE_COLUMNS: list[str] = ["Time", *[f"V{i}" for i in range(1, 29)], "Amount"]
-TARGET_COLUMN = "Class"
+# Shared with the API (single source of truth: fraud_detection.api.schemas)
+FEATURE_COLUMNS: list[str] = CHANNELS
+TARGET_COLUMN = "label"
+RIDE_COLUMN = "ride_id"
+TIME_COLUMN = "time_index"
+LABELS: list[str] = CLASSES
 
 
 def load_params(path: str | Path | None = None) -> dict[str, Any]:

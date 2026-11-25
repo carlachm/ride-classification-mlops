@@ -4,14 +4,14 @@
 export
 
 RUN = uv run
-IMAGE ?= fraud-detection-train
+IMAGE ?= ride-train
 API_IMAGE ?= ride-api
 WEB_IMAGE ?= ride-webapp
 
 .PHONY: help install lock up down logs dvc-setup data sample prepare train repro push test lint format docker-build docker-smoke placeholder api webapp serving-build serving-smoke k8s-up k8s-forward k8s-down load clean
 
 help:  ## Show this help
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 install:  ## Create .venv exactly as described in uv.lock (project + dev tools)
 	uv sync --locked
@@ -31,13 +31,11 @@ logs:  ## Follow the dev stack logs
 dvc-setup:  ## Init DVC with the MinIO remote
 	bash scripts/setup_dvc.sh
 
-data:  ## Download the Kaggle dataset and version it with DVC
-	$(RUN) python -m fraud_detection.data download
-	$(RUN) dvc add data/raw/creditcard.csv
-	$(RUN) dvc push
+data:  ## Get the versioned GBG500 data from the DVC remote (MinIO, needs `make up`)
+	$(RUN) dvc pull
 
-sample:  ## Generate a small synthetic dataset (no Kaggle account needed)
-	$(RUN) python -m fraud_detection.data sample --rows 20000
+sample:  ## Generate synthetic rides with the GBG500 schema (no real data needed)
+	$(RUN) python -m fraud_detection.data sample --rides 150
 
 prepare:  ## Validate + split the raw data
 	$(RUN) python -m fraud_detection.data prepare

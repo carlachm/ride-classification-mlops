@@ -5,33 +5,42 @@
 seed: 42
 
 data:
-  raw_path: data/raw/creditcard.csv
+  # GBG500 dataset (from Inside), versioned with DVC
+  raw_path: data/raw/GBG500.parquet
+  labels_path: data/raw/GBG500_labels.csv
   processed_dir: data/processed
-  target: Class
+  # Split BY RIDE (never by sample) and stratified on the 5 classes
   test_size: 0.15
   val_size: 0.15
 
+# Each ride (10 Hz) is cut into fixed-length windows; the ride prediction is the
+# average of its window probabilities (same logic at training and serving time).
+windows:
+  length: 300   # 30 s
+  stride: 150   # 50 % overlap
+
 model:
-  hidden_dims: [64, 32]
-  dropout: 0.2
+  channels: [32, 64, 128]
+  kernel_size: 5
+  dropout: 0.3
 
 train:
-  epochs: 15
-  batch_size: 2048
-  learning_rate: 0.001
+  epochs: 30
+  batch_size: 128
+  learning_rate: 0.0003
   weight_decay: 0.0001
-  # Weight of the positive (fraud) class in the loss. "auto" = n_neg / n_pos
-  pos_weight: auto
-  early_stopping_patience: 3
+  # Class weights in the loss: "balanced" = inverse class frequency (on rides), "sqrt", "none"
+  class_weight: balanced
+  early_stopping_patience: 8
 
 mlflow:
-  experiment_name: fraud-detection
-  registered_model_name: fraud-detector
-  # Alias given to the best model version (used later by the API)
+  experiment_name: ride-classification
+  # Name and alias loaded by the API (see docs/api-contract.md)
+  registered_model_name: ride-classifier
   champion_alias: champion
 
-# Quality gate: a model below this bar is never promoted and the training
-# command exits with an error (red CI). A random classifier has a PR-AUC equal
-# to the fraud ratio (~0.0017 on the real data).
+# Quality gate: a model below this bar is never promoted and the training command
+# exits with an error (red CI). It must also beat the "always predict Safe" baseline
+# (macro-F1 ~0.18 on the GBG500 test rides).
 quality_gate:
-  min_test_pr_auc: 0.5
+  min_test_macro_f1: 0.20

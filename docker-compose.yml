@@ -56,7 +56,7 @@ services:
 
   mlflow:
     build: ./docker/mlflow
-    image: fraud-mlflow:dev
+    image: ride-mlflow:dev
     depends_on:
       postgres:
         condition: service_healthy

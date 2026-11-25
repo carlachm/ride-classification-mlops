@@ -1,7 +1,7 @@
 # Training image: runs the pipeline (prepare -> train -> MLflow registry).
-#   docker build -t fraud-detection-train .
+#   docker build -t ride-train .
 #   docker run --rm -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 \
-#       -v "$PWD/data:/app/data" fraud-detection-train
+#       -v "$PWD/data:/app/data" ride-train
 FROM python:3.12-slim
 
 # uv pinned (never latest), copied from its official image

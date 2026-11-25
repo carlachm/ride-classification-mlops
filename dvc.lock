@@ -1,0 +1,79 @@
+schema: '2.0'
+stages:
+  prepare:
+    cmd: python -m fraud_detection.data prepare
+    deps:
+    - path: data/raw/GBG500.parquet
+      hash: md5
+      md5: f7eb702062e890c9f3c533e5eaa683b7
+      size: 30206760
+    - path: data/raw/GBG500_labels.csv
+      hash: md5
+      md5: 843abe6d85802a850c945519678d2232
+      size: 35532
+    - path: src/fraud_detection/data.py
+      hash: md5
+      md5: 2cfef00ed7b7a6c27a609e1faa9d5388
+      size: 9571
+    params:
+      params.yaml:
+        data:
+          raw_path: data/raw/GBG500.parquet
+          labels_path: data/raw/GBG500_labels.csv
+          processed_dir: data/processed
+          test_size: 0.15
+          val_size: 0.15
+        seed: 42
+    outs:
+    - path: data/processed
+      hash: md5
+      md5: cce69a3e7e88a722677c35bed676660a.dir
+      size: 19694760
+      nfiles: 4
+  train:
+    cmd: python -m fraud_detection.train
+    deps:
+    - path: data/processed
+      hash: md5
+      md5: cce69a3e7e88a722677c35bed676660a.dir
+      size: 19694760
+      nfiles: 4
+    - path: src/fraud_detection/evaluate.py
+      hash: md5
+      md5: aaf7bc1b12de73f6f386056e773d8402
+      size: 2434
+    - path: src/fraud_detection/model.py
+      hash: md5
+      md5: 7f1b507181df02655f908013ffc53d95
+      size: 6293
+    - path: src/fraud_detection/train.py
+      hash: md5
+      md5: 15e9b62317d172f814dba1f134ab8b7e
+      size: 10475
+    params:
+      params.yaml:
+        model:
+          channels:
+          - 32
+          - 64
+          - 128
+          kernel_size: 5
+          dropout: 0.3
+        quality_gate:
+          min_test_macro_f1: 0.2
+        seed: 42
+        train:
+          epochs: 30
+          batch_size: 128
+          learning_rate: 0.0003
+          weight_decay: 0.0001
+          class_weight: balanced
+          early_stopping_patience: 8
+        windows:
+          length: 300
+          stride: 150
+    outs:
+    - path: metrics.json
+      hash: md5
+      md5: f096dbde4b55bd8b5b8fae4ce68aa86c
+      size: 489

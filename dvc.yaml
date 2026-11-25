@@ -1,10 +1,11 @@
 # DVC pipeline: `dvc repro` re-runs only the stages whose deps/params changed.
-# Raw data itself is versioned with `dvc add data/raw/creditcard.csv` (see README).
+# Raw data (GBG500 from Inside) is versioned with `dvc add data/raw/GBG500.parquet data/raw/GBG500_labels.csv`.
 stages:
   prepare:
     cmd: python -m fraud_detection.data prepare
     deps:
-      - data/raw/creditcard.csv
+      - data/raw/GBG500.parquet
+      - data/raw/GBG500_labels.csv
       - src/fraud_detection/data.py
     params:
       - seed
@@ -22,6 +23,7 @@ stages:
       - src/fraud_detection/evaluate.py
     params:
       - seed
+      - windows
       - model
       - train
       - quality_gate
