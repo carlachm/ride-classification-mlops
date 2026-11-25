@@ -85,6 +85,7 @@ CI/CD (GitHub Actions), serving (FastAPI + Streamlit) and deployment on Kubernet
 ├── params.yaml               # ALL hyper-parameters (single source of truth)
 ├── pyproject.toml / uv.lock  # dependencies (uv)
 ├── docs/api-contract.md      # interface contract: model <-> API <-> monitoring
+├── docs/workflows.md         # workflow DAGs (DVC, CI/CD, serving) + API sizing report
 └── Makefile                  # shortcuts (`make help`)
 ```
 
@@ -257,7 +258,8 @@ interpretable baseline, and pre-training on the unlabelled SRV3490 rides.
 
 Interactive documentation (Swagger): `http://localhost:8000/docs`. Invalid input gives a clear **422**, no model
 gives **503**. Every prediction is appended as a JSON line to `logs/predictions.jsonl` (per-ride channel
-mean/std for drift detection). The full contract is in [docs/api-contract.md](docs/api-contract.md).
+mean/std for drift detection). The full contract is in [docs/api-contract.md](docs/api-contract.md). Workflow DAGs and the load-test
+sizing of the API: [docs/workflows.md](docs/workflows.md).
 
 The web app sends a demo ride or an uploaded CSV/Parquet ride to the API, shows the 5 probabilities and lets the
 user send feedback (the true class), which feeds the monitoring:
@@ -342,8 +344,9 @@ needs the real data.
 | Member | Main contributions |
 |---|---|
 | Carla | MLOps foundation (uv, DVC, MLflow + MinIO + PostgreSQL, CI), data pipeline, 1D-CNN model, training, evaluation, registry |
-| Enzo | FastAPI API, Streamlit web app, serving images, Kubernetes, deployment workflow, interface contract |
-| Ugo | monitoring (Prometheus + Grafana), retraining pipeline, feature store |
+| Enzo | FastAPI API, Streamlit web app, serving images, Kubernetes, deployment workflow, interface contract, workflow DAGs, load test and sizing |
+| Ugo | monitoring: Prometheus + Grafana dashboards, drift alerts on the API metrics *(in progress)* |
+| Santiago | automated retraining pipeline (GitHub Actions, drift trigger) and feature store *(in progress)* |
 
 
 Git workflow (see [CONTRIBUTING.md](CONTRIBUTING.md)): one issue per task, one branch per issue
